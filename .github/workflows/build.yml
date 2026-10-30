@@ -1,4 +1,4 @@
-name: Build APK
+name: Build Float Teleprompter APK
 on:
   push:
   workflow_dispatch:
@@ -7,22 +7,415 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
-      - run: npm install
-      - run: mkdir -p www && cp index.html www/index.html
-      - run: npx cap add android
-      - name: Camera and mic permissions
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Create project files
         run: |
-          sed -i 's#</manifest>#    <uses-permission android:name="android.permission.CAMERA" />\n    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />\n    <uses-feature android:name="android.hardware.camera" android:required="false" />\n</manifest>#' android/app/src/main/AndroidManifest.xml
-      - run: npx cap sync android
-      - run: cd android && chmod +x gradlew && ./gradlew assembleDebug
+          mkdir -p app
+          mkdir -p app/src/main
+          mkdir -p app/src/main/java/com/rajesh/floatprompter
+          cat > settings.gradle << 'EOF_0'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "FloatTeleprompter"
+          include ':app'
+          EOF_0
+          cat > build.gradle << 'EOF_1'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF_1
+          cat > gradle.properties << 'EOF_2'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.nonTransitiveRClass=true
+          EOF_2
+          cat > app/build.gradle << 'EOF_3'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.rajesh.floatprompter'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.rajesh.floatprompter'
+                  minSdk 26
+                  targetSdk 33
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          tasks.withType(JavaCompile).configureEach {
+              options.encoding = 'UTF-8'
+          }
+          EOF_3
+          cat > app/src/main/AndroidManifest.xml << 'EOF_4'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <application
+                  android:allowBackup="false"
+                  android:label="Float Teleprompter"
+                  android:icon="@android:drawable/ic_media_play"
+                  android:theme="@android:style/Theme.DeviceDefault.Light">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+                  <service android:name=".OverlayService" android:exported="false" />
+              </application>
+          </manifest>
+          EOF_4
+          cat > app/src/main/java/com/rajesh/floatprompter/MainActivity.java << 'EOF_5'
+          package com.rajesh.floatprompter;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.provider.Settings;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+          import android.widget.Toast;
+
+          public class MainActivity extends Activity {
+              EditText et;
+
+              @Override
+              protected void onCreate(Bundle b) {
+                  super.onCreate(b);
+                  float d = getResources().getDisplayMetrics().density;
+                  int p = (int) (16 * d);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(p, p * 2, p, p);
+
+                  TextView title = new TextView(this);
+                  title.setText("Floating Teleprompter");
+                  title.setTextSize(22);
+                  root.addView(title);
+
+                  TextView info = new TextView(this);
+                  info.setText("Script paste karo aur Start dabao. Fir Camera app kholo, script uske upar tairegi.");
+                  info.setPadding(0, p / 2, 0, p / 2);
+                  root.addView(info);
+
+                  et = new EditText(this);
+                  et.setGravity(Gravity.TOP);
+                  et.setHint("Apni script yahan paste karo...");
+                  et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+                  et.setMinLines(8);
+                  et.setText(getSharedPreferences("tp", 0).getString("script", ""));
+                  root.addView(et, new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+
+                  Button start = new Button(this);
+                  start.setText("Start floating prompter");
+                  start.setOnClickListener(v -> go());
+                  root.addView(start);
+
+                  setContentView(root);
+              }
+
+              void go() {
+                  String s = et.getText().toString().trim();
+                  if (s.isEmpty()) {
+                      Toast.makeText(this, "Pehle script paste karo", Toast.LENGTH_SHORT).show();
+                      return;
+                  }
+                  getSharedPreferences("tp", 0).edit().putString("script", s).apply();
+                  if (!Settings.canDrawOverlays(this)) {
+                      Toast.makeText(this, "'Display over other apps' allow karo, fir wapas aakar Start dabao",
+                              Toast.LENGTH_LONG).show();
+                      startActivity(new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                              Uri.parse("package:" + getPackageName())));
+                      return;
+                  }
+                  Intent i = new Intent(this, OverlayService.class);
+                  i.putExtra("script", s);
+                  startForegroundService(i);
+                  moveTaskToBack(true);
+              }
+          }
+          EOF_5
+          cat > app/src/main/java/com/rajesh/floatprompter/OverlayService.java << 'EOF_6'
+          package com.rajesh.floatprompter;
+
+          import android.app.Notification;
+          import android.app.NotificationChannel;
+          import android.app.NotificationManager;
+          import android.app.Service;
+          import android.content.Intent;
+          import android.content.res.Configuration;
+          import android.graphics.Color;
+          import android.graphics.PixelFormat;
+          import android.os.Handler;
+          import android.os.IBinder;
+          import android.os.Looper;
+          import android.os.SystemClock;
+          import android.util.DisplayMetrics;
+          import android.view.Gravity;
+          import android.view.MotionEvent;
+          import android.view.View;
+          import android.view.WindowManager;
+          import android.widget.FrameLayout;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.SeekBar;
+          import android.widget.Switch;
+          import android.widget.TextView;
+
+          public class OverlayService extends Service {
+              interface IntCb { void on(int v); }
+
+              WindowManager wm;
+              WindowManager.LayoutParams lp;
+              FrameLayout root;
+              ScrollView sv;
+              TextView tv, playBtn;
+              LinearLayout panel;
+              Handler h = new Handler(Looper.getMainLooper());
+              boolean playing = false;
+              float pos = 0, d = 1;
+              long last = 0;
+              int speed = 25, size = 28, opacity = 35;
+              float startX, startY;
+              int startW, startH, startPx, startPy;
+
+              @Override
+              public IBinder onBind(Intent i) { return null; }
+
+              int dp(int v) { return (int) (v * d); }
+
+              @Override
+              public int onStartCommand(Intent i, int flags, int id) {
+                  NotificationChannel ch = new NotificationChannel("tp", "Teleprompter",
+                          NotificationManager.IMPORTANCE_LOW);
+                  getSystemService(NotificationManager.class).createNotificationChannel(ch);
+                  Notification n = new Notification.Builder(this, "tp")
+                          .setContentTitle("Teleprompter chal raha hai")
+                          .setContentText("Band karne ke liye prompter me X dabao")
+                          .setSmallIcon(android.R.drawable.ic_media_play)
+                          .build();
+                  startForeground(1, n);
+                  String s = i != null ? i.getStringExtra("script") : null;
+                  if (s == null) s = getSharedPreferences("tp", 0).getString("script", "");
+                  if (root != null) {
+                      tv.setText(s);
+                      sv.scrollTo(0, 0);
+                      pos = 0;
+                  } else {
+                      build(s);
+                  }
+                  return START_NOT_STICKY;
+              }
+
+              TextView btn(String t) {
+                  TextView b = new TextView(this);
+                  b.setText(t);
+                  b.setTextSize(20);
+                  b.setTextColor(Color.WHITE);
+                  b.setGravity(Gravity.CENTER);
+                  b.setPadding(dp(14), dp(8), dp(14), dp(8));
+                  return b;
+              }
+
+              void addSeek(LinearLayout p, String label, int max, int init, final IntCb cb) {
+                  TextView l = new TextView(this);
+                  l.setText(label);
+                  l.setTextColor(Color.WHITE);
+                  l.setPadding(dp(14), dp(6), 0, 0);
+                  p.addView(l);
+                  SeekBar s = new SeekBar(this);
+                  s.setMax(max);
+                  s.setProgress(init);
+                  s.setPadding(dp(18), dp(4), dp(18), dp(4));
+                  s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+                      public void onProgressChanged(SeekBar b, int v, boolean u) { cb.on(v); }
+                      public void onStartTrackingTouch(SeekBar b) {}
+                      public void onStopTrackingTouch(SeekBar b) {}
+                  });
+                  p.addView(s);
+              }
+
+              void build(String script) {
+                  d = getResources().getDisplayMetrics().density;
+                  wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  root = new FrameLayout(this);
+                  root.setBackgroundColor(Color.argb(opacity * 255 / 100, 0, 0, 0));
+                  root.setKeepScreenOn(true);
+
+                  LinearLayout col = new LinearLayout(this);
+                  col.setOrientation(LinearLayout.VERTICAL);
+
+                  LinearLayout bar = new LinearLayout(this);
+                  bar.setOrientation(LinearLayout.HORIZONTAL);
+                  bar.setBackgroundColor(0xCC000000);
+                  bar.setGravity(Gravity.CENTER_VERTICAL);
+                  TextView drag = btn("\u2261 Hilao");
+                  drag.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                  playBtn = btn("\u25B6");
+                  TextView rst = btn("\u23EE");
+                  TextView gear = btn("\u2699");
+                  TextView close = btn("\u2715");
+                  bar.addView(drag, new LinearLayout.LayoutParams(0,
+                          LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
+                  bar.addView(rst);
+                  bar.addView(playBtn);
+                  bar.addView(gear);
+                  bar.addView(close);
+
+                  panel = new LinearLayout(this);
+                  panel.setOrientation(LinearLayout.VERTICAL);
+                  panel.setBackgroundColor(0xE6222222);
+                  panel.setVisibility(View.GONE);
+                  addSeek(panel, "Speed", 100, speed, v -> speed = v);
+                  addSeek(panel, "Size", 60, size - 12, v -> { size = v + 12; tv.setTextSize(size); });
+                  addSeek(panel, "Opacity", 100, opacity,
+                          v -> { opacity = v; root.setBackgroundColor(Color.argb(v * 255 / 100, 0, 0, 0)); });
+                  Switch sw = new Switch(this);
+                  sw.setText("Mirror  ");
+                  sw.setTextColor(Color.WHITE);
+                  sw.setPadding(dp(14), dp(8), dp(14), dp(8));
+                  sw.setOnCheckedChangeListener((b, c) -> tv.setScaleX(c ? -1f : 1f));
+                  panel.addView(sw);
+
+                  sv = new ScrollView(this);
+                  sv.setVerticalScrollBarEnabled(false);
+                  tv = new TextView(this);
+                  tv.setText(script);
+                  tv.setTextColor(Color.WHITE);
+                  tv.setTextSize(size);
+                  tv.setGravity(Gravity.CENTER_HORIZONTAL);
+                  tv.setLineSpacing(0, 1.3f);
+                  tv.setShadowLayer(8, 0, 0, Color.BLACK);
+                  tv.setPadding(dp(16), dp(60), dp(16), dp(260));
+                  sv.addView(tv);
+
+                  col.addView(bar);
+                  col.addView(panel);
+                  col.addView(sv, new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
+                  root.addView(col, new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
+
+                  TextView handle = btn("\u25E2");
+                  root.addView(handle, new FrameLayout.LayoutParams(
+                          FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
+                          Gravity.BOTTOM | Gravity.END));
+
+                  DisplayMetrics dm = getResources().getDisplayMetrics();
+                  lp = new WindowManager.LayoutParams(
+                          (int) (dm.widthPixels * 0.92f), (int) (dm.heightPixels * 0.4f),
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                          PixelFormat.TRANSLUCENT);
+                  lp.gravity = Gravity.TOP | Gravity.START;
+                  lp.x = (int) (dm.widthPixels * 0.04f);
+                  lp.y = dp(120);
+
+                  drag.setOnTouchListener((v, e) -> {
+                      if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                          startX = e.getRawX(); startY = e.getRawY(); startPx = lp.x; startPy = lp.y;
+                      } else if (e.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                          lp.x = startPx + (int) (e.getRawX() - startX);
+                          lp.y = startPy + (int) (e.getRawY() - startY);
+                          wm.updateViewLayout(root, lp);
+                      }
+                      return true;
+                  });
+                  handle.setOnTouchListener((v, e) -> {
+                      if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                          startX = e.getRawX(); startY = e.getRawY(); startW = lp.width; startH = lp.height;
+                      } else if (e.getActionMasked() == MotionEvent.ACTION_MOVE) {
+                          lp.width = Math.max(dp(200), startW + (int) (e.getRawX() - startX));
+                          lp.height = Math.max(dp(160), startH + (int) (e.getRawY() - startY));
+                          wm.updateViewLayout(root, lp);
+                      }
+                      return true;
+                  });
+                  playBtn.setOnClickListener(v -> setPlay(!playing));
+                  rst.setOnClickListener(v -> { sv.scrollTo(0, 0); pos = 0; });
+                  gear.setOnClickListener(v -> panel.setVisibility(
+                          panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
+                  close.setOnClickListener(v -> stopSelf());
+
+                  wm.addView(root, lp);
+              }
+
+              final Runnable tick = new Runnable() {
+                  public void run() {
+                      if (!playing) return;
+                      long now = SystemClock.uptimeMillis();
+                      float dt = (now - last) / 1000f;
+                      last = now;
+                      pos += speed * d * 1.2f * dt;
+                      sv.scrollTo(0, (int) pos);
+                      int max = tv.getHeight() - sv.getHeight();
+                      if (max > 0 && pos >= max) { setPlay(false); return; }
+                      h.postDelayed(this, 16);
+                  }
+              };
+
+              void setPlay(boolean p) {
+                  playing = p;
+                  playBtn.setText(p ? "\u23F8" : "\u25B6");
+                  if (p) {
+                      last = SystemClock.uptimeMillis();
+                      pos = sv.getScrollY();
+                      h.post(tick);
+                  } else {
+                      h.removeCallbacks(tick);
+                  }
+              }
+
+              @Override
+              public void onConfigurationChanged(Configuration c) {
+                  super.onConfigurationChanged(c);
+                  if (root == null) return;
+                  DisplayMetrics dm = getResources().getDisplayMetrics();
+                  lp.width = (int) (dm.widthPixels * 0.92f);
+                  lp.height = (int) (dm.heightPixels * 0.4f);
+                  lp.x = (int) (dm.widthPixels * 0.04f);
+                  lp.y = dp(40);
+                  wm.updateViewLayout(root, lp);
+              }
+
+              @Override
+              public void onDestroy() {
+                  playing = false;
+                  h.removeCallbacks(tick);
+                  if (root != null) {
+                      try { wm.removeView(root); } catch (Exception e) {}
+                      root = null;
+                  }
+                  super.onDestroy();
+              }
+          }
+          EOF_6
+      - name: Build APK
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
-          name: Teleprompter-APK
-          path: android/app/build/outputs/apk/debug/app-debug.apk
+          name: Float-Teleprompter-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
