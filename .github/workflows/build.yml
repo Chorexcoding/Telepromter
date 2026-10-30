@@ -31,7 +31,7 @@ jobs:
           EOF_0
           cat > build.gradle << 'EOF_1'
           plugins {
-              id 'com.android.application' version '8.5.2' apply false
+              id 'com.android.application' version '8.6.0' apply false
           }
           EOF_1
           cat > gradle.properties << 'EOF_2'
@@ -44,11 +44,11 @@ jobs:
           }
           android {
               namespace 'com.rajesh.floatprompter'
-              compileSdk 34
+              compileSdk 35
               defaultConfig {
                   applicationId 'com.rajesh.floatprompter'
                   minSdk 26
-                  targetSdk 33
+                  targetSdk 35
                   versionCode 1
                   versionName '1.0'
               }
@@ -66,18 +66,26 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
               <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
               <application
                   android:allowBackup="false"
                   android:label="Float Teleprompter"
                   android:icon="@android:drawable/ic_media_play"
-                  android:theme="@android:style/Theme.DeviceDefault.Light">
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
                           <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
-                  <service android:name=".OverlayService" android:exported="false" />
+                  <service
+                      android:name=".OverlayService"
+                      android:exported="false"
+                      android:foregroundServiceType="specialUse">
+                      <property
+                          android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                          android:value="teleprompter_overlay" />
+                  </service>
               </application>
           </manifest>
           EOF_4
@@ -85,13 +93,18 @@ jobs:
           package com.rajesh.floatprompter;
 
           import android.app.Activity;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.content.Context;
           import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.graphics.Color;
+          import android.graphics.drawable.GradientDrawable;
           import android.net.Uri;
           import android.os.Bundle;
           import android.provider.Settings;
           import android.text.InputType;
           import android.view.Gravity;
-          import android.widget.Button;
           import android.widget.EditText;
           import android.widget.LinearLayout;
           import android.widget.TextView;
@@ -99,39 +112,136 @@ jobs:
 
           public class MainActivity extends Activity {
               EditText et;
+              int orient;
+              float d = 1;
+              final TextView[] ob = new TextView[3];
+              SharedPreferences prefs;
+
+              int dp(int v) { return (int) (v * d); }
+
+              GradientDrawable box(int color, int r) {
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(color);
+                  g.setCornerRadius(dp(r));
+                  return g;
+              }
+
+              TextView txt(String t, int sz, int color) {
+                  TextView v = new TextView(this);
+                  v.setText(t);
+                  v.setTextSize(sz);
+                  v.setTextColor(color);
+                  return v;
+              }
+
+              TextView pill(String t) {
+                  TextView v = txt(t, 14, Color.WHITE);
+                  v.setGravity(Gravity.CENTER);
+                  v.setPadding(dp(16), dp(8), dp(16), dp(8));
+                  v.setBackground(box(0xFF2A2A32, 20));
+                  return v;
+              }
+
+              void paint() {
+                  for (int i = 0; i < 3; i++) {
+                      ob[i].setBackground(box(i == orient ? 0xFF2563EB : 0xFF2A2A32, 12));
+                      ob[i].setTextColor(i == orient ? Color.WHITE : 0xFFB0B0BA);
+                  }
+              }
 
               @Override
-              protected void onCreate(Bundle b) {
-                  super.onCreate(b);
-                  float d = getResources().getDisplayMetrics().density;
-                  int p = (int) (16 * d);
+              protected void onCreate(Bundle saved) {
+                  super.onCreate(saved);
+                  d = getResources().getDisplayMetrics().density;
+                  prefs = getSharedPreferences("tp", 0);
+                  orient = prefs.getInt("orient", 0);
+
                   LinearLayout root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
-                  root.setPadding(p, p * 2, p, p);
+                  root.setBackgroundColor(0xFF121216);
+                  root.setFitsSystemWindows(true);
 
-                  TextView title = new TextView(this);
-                  title.setText("Floating Teleprompter");
-                  title.setTextSize(22);
-                  root.addView(title);
+                  LinearLayout c = new LinearLayout(this);
+                  c.setOrientation(LinearLayout.VERTICAL);
+                  c.setPadding(dp(18), dp(14), dp(18), dp(18));
+                  root.addView(c, new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.MATCH_PARENT));
 
-                  TextView info = new TextView(this);
-                  info.setText("Script paste karo aur Start dabao. Fir Camera app kholo, script uske upar tairegi.");
-                  info.setPadding(0, p / 2, 0, p / 2);
-                  root.addView(info);
+                  TextView title = txt("Float Teleprompter", 26, Color.WHITE);
+                  title.setTypeface(null, android.graphics.Typeface.BOLD);
+                  c.addView(title);
+                  TextView sub = txt("Script paste karo, Start dabao, fir Camera app kholo. Script uske upar tairegi.", 14, 0xFF9A9AA6);
+                  sub.setPadding(0, dp(4), 0, dp(12));
+                  c.addView(sub);
+
+                  LinearLayout row = new LinearLayout(this);
+                  row.setOrientation(LinearLayout.HORIZONTAL);
+                  TextView paste = pill("Paste");
+                  TextView clear = pill("Clear");
+                  LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  rp.setMargins(0, 0, dp(8), dp(8));
+                  row.addView(paste, rp);
+                  row.addView(clear, rp);
+                  c.addView(row);
 
                   et = new EditText(this);
                   et.setGravity(Gravity.TOP);
-                  et.setHint("Apni script yahan paste karo...");
+                  et.setHint("Apni script yahan likho ya paste karo...");
+                  et.setHintTextColor(0xFF6A6A76);
+                  et.setTextColor(Color.WHITE);
+                  et.setTextSize(17);
+                  et.setBackground(box(0xFF1E1E26, 14));
+                  et.setPadding(dp(14), dp(14), dp(14), dp(14));
                   et.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
                   et.setMinLines(8);
-                  et.setText(getSharedPreferences("tp", 0).getString("script", ""));
-                  root.addView(et, new LinearLayout.LayoutParams(
+                  et.setText(prefs.getString("script", ""));
+                  c.addView(et, new LinearLayout.LayoutParams(
                           LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f));
 
-                  Button start = new Button(this);
-                  start.setText("Start floating prompter");
+                  paste.setOnClickListener(v -> {
+                      ClipboardManager cm = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+                      if (cm != null && cm.hasPrimaryClip() && cm.getPrimaryClip().getItemCount() > 0) {
+                          CharSequence s = cm.getPrimaryClip().getItemAt(0).coerceToText(this);
+                          if (s != null) et.setText(s);
+                      }
+                  });
+                  clear.setOnClickListener(v -> et.setText(""));
+
+                  TextView ol = txt("Screen lock (camera ke liye)", 14, 0xFF9A9AA6);
+                  ol.setPadding(0, dp(14), 0, dp(6));
+                  c.addView(ol);
+                  LinearLayout seg = new LinearLayout(this);
+                  String[] names = {"Auto", "Vertical", "Horizontal"};
+                  for (int i = 0; i < 3; i++) {
+                      final int k = i;
+                      TextView t = txt(names[i], 15, Color.WHITE);
+                      t.setGravity(Gravity.CENTER);
+                      t.setPadding(0, dp(12), 0, dp(12));
+                      t.setOnClickListener(v -> {
+                          orient = k;
+                          prefs.edit().putInt("orient", k).apply();
+                          paint();
+                      });
+                      ob[i] = t;
+                      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,
+                              LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                      p.setMargins(dp(3), 0, dp(3), 0);
+                      seg.addView(t, p);
+                  }
+                  c.addView(seg);
+                  paint();
+
+                  TextView start = txt("Start floating prompter", 18, Color.WHITE);
+                  start.setTypeface(null, android.graphics.Typeface.BOLD);
+                  start.setGravity(Gravity.CENTER);
+                  start.setPadding(0, dp(16), 0, dp(16));
+                  start.setBackground(box(0xFF2563EB, 14));
                   start.setOnClickListener(v -> go());
-                  root.addView(start);
+                  LinearLayout.LayoutParams sp2 = new LinearLayout.LayoutParams(
+                          LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                  sp2.setMargins(0, dp(16), 0, 0);
+                  c.addView(start, sp2);
 
                   setContentView(root);
               }
@@ -139,10 +249,10 @@ jobs:
               void go() {
                   String s = et.getText().toString().trim();
                   if (s.isEmpty()) {
-                      Toast.makeText(this, "Pehle script paste karo", Toast.LENGTH_SHORT).show();
+                      Toast.makeText(this, "Pehle script likho ya paste karo", Toast.LENGTH_SHORT).show();
                       return;
                   }
-                  getSharedPreferences("tp", 0).edit().putString("script", s).apply();
+                  prefs.edit().putString("script", s).apply();
                   if (!Settings.canDrawOverlays(this)) {
                       Toast.makeText(this, "'Display over other apps' allow karo, fir wapas aakar Start dabao",
                               Toast.LENGTH_LONG).show();
@@ -165,9 +275,14 @@ jobs:
           import android.app.NotificationManager;
           import android.app.Service;
           import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.content.pm.ActivityInfo;
+          import android.content.pm.ServiceInfo;
           import android.content.res.Configuration;
           import android.graphics.Color;
           import android.graphics.PixelFormat;
+          import android.graphics.drawable.GradientDrawable;
+          import android.os.Build;
           import android.os.Handler;
           import android.os.IBinder;
           import android.os.Looper;
@@ -190,14 +305,17 @@ jobs:
               WindowManager wm;
               WindowManager.LayoutParams lp;
               FrameLayout root;
+              LinearLayout bar, panel, chip;
               ScrollView sv;
-              TextView tv, playBtn;
-              LinearLayout panel;
+              TextView tv, playBtn, chipPlay, handle;
+              View orientView;
+              final TextView[] ob = new TextView[3];
+              SharedPreferences prefs;
               Handler h = new Handler(Looper.getMainLooper());
-              boolean playing = false;
+              boolean playing = false, locked = false, mirror = false;
               float pos = 0, d = 1;
               long last = 0;
-              int speed = 25, size = 28, opacity = 35;
+              int speed = 25, size = 28, opacity = 35, orient = 0;
               float startX, startY;
               int startW, startH, startPx, startPy;
 
@@ -216,7 +334,11 @@ jobs:
                           .setContentText("Band karne ke liye prompter me X dabao")
                           .setSmallIcon(android.R.drawable.ic_media_play)
                           .build();
-                  startForeground(1, n);
+                  if (Build.VERSION.SDK_INT >= 34) {
+                      startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE);
+                  } else {
+                      startForeground(1, n);
+                  }
                   String s = i != null ? i.getStringExtra("script") : null;
                   if (s == null) s = getSharedPreferences("tp", 0).getString("script", "");
                   if (root != null) {
@@ -229,13 +351,20 @@ jobs:
                   return START_NOT_STICKY;
               }
 
+              GradientDrawable rounded(int color, int r) {
+                  GradientDrawable g = new GradientDrawable();
+                  g.setColor(color);
+                  g.setCornerRadius(dp(r));
+                  return g;
+              }
+
               TextView btn(String t) {
                   TextView b = new TextView(this);
                   b.setText(t);
-                  b.setTextSize(20);
+                  b.setTextSize(19);
                   b.setTextColor(Color.WHITE);
                   b.setGravity(Gravity.CENTER);
-                  b.setPadding(dp(14), dp(8), dp(14), dp(8));
+                  b.setPadding(dp(10), dp(8), dp(10), dp(8));
                   return b;
               }
 
@@ -250,16 +379,105 @@ jobs:
                   s.setProgress(init);
                   s.setPadding(dp(18), dp(4), dp(18), dp(4));
                   s.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-                      public void onProgressChanged(SeekBar b, int v, boolean u) { cb.on(v); }
-                      public void onStartTrackingTouch(SeekBar b) {}
-                      public void onStopTrackingTouch(SeekBar b) {}
+                      public void onProgressChanged(SeekBar sb, int v, boolean u) { cb.on(v); }
+                      public void onStartTrackingTouch(SeekBar sb) {}
+                      public void onStopTrackingTouch(SeekBar sb) {}
                   });
                   p.addView(s);
+              }
+
+              void paintOrient() {
+                  for (int i = 0; i < 3; i++) {
+                      ob[i].setBackground(rounded(i == orient ? 0xFF2563EB : 0xFF3A3A42, 10));
+                  }
+              }
+
+              void applyOrientation() {
+                  if (orientView != null) {
+                      try { wm.removeView(orientView); } catch (Exception e) {}
+                      orientView = null;
+                  }
+                  if (orient == 0) return;
+                  orientView = new View(this);
+                  WindowManager.LayoutParams o = new WindowManager.LayoutParams(1, 1,
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                          PixelFormat.TRANSLUCENT);
+                  o.gravity = Gravity.TOP | Gravity.START;
+                  o.screenOrientation = orient == 1
+                          ? ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                          : ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE;
+                  try { wm.addView(orientView, o); } catch (Exception e) { orientView = null; }
+              }
+
+              void fit() {
+                  DisplayMetrics dm = getResources().getDisplayMetrics();
+                  boolean land = dm.widthPixels > dm.heightPixels;
+                  float w = land ? 0.62f : 0.92f;
+                  float hh = land ? 0.5f : 0.4f;
+                  lp.width = (int) (dm.widthPixels * w);
+                  lp.height = (int) (dm.heightPixels * hh);
+                  lp.x = (int) (dm.widthPixels * (1 - w) / 2f);
+                  lp.y = land ? dp(8) : dp(120);
+              }
+
+              void addChip() {
+                  chip = new LinearLayout(this);
+                  chip.setOrientation(LinearLayout.VERTICAL);
+                  chip.setBackground(rounded(0xCC000000, 16));
+                  chipPlay = btn(playing ? "\u23F8" : "\u25B6");
+                  TextView unlock = btn("\uD83D\uDD13");
+                  chipPlay.setOnClickListener(v -> setPlay(!playing));
+                  unlock.setOnClickListener(v -> setLocked(false));
+                  chip.addView(chipPlay);
+                  chip.addView(unlock);
+                  WindowManager.LayoutParams cp = new WindowManager.LayoutParams(
+                          WindowManager.LayoutParams.WRAP_CONTENT, WindowManager.LayoutParams.WRAP_CONTENT,
+                          WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                          WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+                                  | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
+                          PixelFormat.TRANSLUCENT);
+                  cp.gravity = Gravity.END | Gravity.CENTER_VERTICAL;
+                  cp.x = dp(6);
+                  wm.addView(chip, cp);
+              }
+
+              void removeChip() {
+                  if (chip != null) {
+                      try { wm.removeView(chip); } catch (Exception e) {}
+                      chip = null;
+                      chipPlay = null;
+                  }
+              }
+
+              void setLocked(boolean l) {
+                  locked = l;
+                  if (l) {
+                      lp.flags |= WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                      bar.setVisibility(View.GONE);
+                      panel.setVisibility(View.GONE);
+                      handle.setVisibility(View.GONE);
+                      addChip();
+                  } else {
+                      lp.flags &= ~WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE;
+                      bar.setVisibility(View.VISIBLE);
+                      handle.setVisibility(View.VISIBLE);
+                      removeChip();
+                  }
+                  wm.updateViewLayout(root, lp);
               }
 
               void build(String script) {
                   d = getResources().getDisplayMetrics().density;
                   wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+                  prefs = getSharedPreferences("tp", 0);
+                  speed = prefs.getInt("speed", 25);
+                  size = prefs.getInt("size", 28);
+                  opacity = prefs.getInt("opacity", 35);
+                  mirror = prefs.getBoolean("mirror", false);
+                  orient = prefs.getInt("orient", 0);
+
                   root = new FrameLayout(this);
                   root.setBackgroundColor(Color.argb(opacity * 255 / 100, 0, 0, 0));
                   root.setKeepScreenOn(true);
@@ -267,7 +485,7 @@ jobs:
                   LinearLayout col = new LinearLayout(this);
                   col.setOrientation(LinearLayout.VERTICAL);
 
-                  LinearLayout bar = new LinearLayout(this);
+                  bar = new LinearLayout(this);
                   bar.setOrientation(LinearLayout.HORIZONTAL);
                   bar.setBackgroundColor(0xCC000000);
                   bar.setGravity(Gravity.CENTER_VERTICAL);
@@ -275,12 +493,14 @@ jobs:
                   drag.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
                   playBtn = btn("\u25B6");
                   TextView rst = btn("\u23EE");
+                  TextView lockBtn = btn("\uD83D\uDD12");
                   TextView gear = btn("\u2699");
                   TextView close = btn("\u2715");
                   bar.addView(drag, new LinearLayout.LayoutParams(0,
                           LinearLayout.LayoutParams.WRAP_CONTENT, 1f));
                   bar.addView(rst);
                   bar.addView(playBtn);
+                  bar.addView(lockBtn);
                   bar.addView(gear);
                   bar.addView(close);
 
@@ -288,16 +508,58 @@ jobs:
                   panel.setOrientation(LinearLayout.VERTICAL);
                   panel.setBackgroundColor(0xE6222222);
                   panel.setVisibility(View.GONE);
-                  addSeek(panel, "Speed", 100, speed, v -> speed = v);
-                  addSeek(panel, "Size", 60, size - 12, v -> { size = v + 12; tv.setTextSize(size); });
-                  addSeek(panel, "Opacity", 100, opacity,
-                          v -> { opacity = v; root.setBackgroundColor(Color.argb(v * 255 / 100, 0, 0, 0)); });
+                  addSeek(panel, "Speed", 100, speed, v -> {
+                      speed = v;
+                      prefs.edit().putInt("speed", v).apply();
+                  });
+                  addSeek(panel, "Size", 60, size - 12, v -> {
+                      size = v + 12;
+                      tv.setTextSize(size);
+                      prefs.edit().putInt("size", size).apply();
+                  });
+                  addSeek(panel, "Opacity", 100, opacity, v -> {
+                      opacity = v;
+                      root.setBackgroundColor(Color.argb(v * 255 / 100, 0, 0, 0));
+                      prefs.edit().putInt("opacity", v).apply();
+                  });
                   Switch sw = new Switch(this);
                   sw.setText("Mirror  ");
                   sw.setTextColor(Color.WHITE);
                   sw.setPadding(dp(14), dp(8), dp(14), dp(8));
-                  sw.setOnCheckedChangeListener((b, c) -> tv.setScaleX(c ? -1f : 1f));
+                  sw.setChecked(mirror);
+                  sw.setOnCheckedChangeListener((cb, on) -> {
+                      mirror = on;
+                      tv.setScaleX(on ? -1f : 1f);
+                      prefs.edit().putBoolean("mirror", on).apply();
+                  });
                   panel.addView(sw);
+
+                  TextView ol = new TextView(this);
+                  ol.setText("Screen lock");
+                  ol.setTextColor(Color.WHITE);
+                  ol.setPadding(dp(14), dp(6), 0, dp(4));
+                  panel.addView(ol);
+                  LinearLayout seg = new LinearLayout(this);
+                  seg.setPadding(dp(10), 0, dp(10), dp(10));
+                  String[] names = {"Auto", "Vertical", "Horizontal"};
+                  for (int i = 0; i < 3; i++) {
+                      final int k = i;
+                      TextView t = btn(names[i]);
+                      t.setTextSize(14);
+                      t.setOnClickListener(v -> {
+                          orient = k;
+                          prefs.edit().putInt("orient", k).apply();
+                          paintOrient();
+                          applyOrientation();
+                      });
+                      ob[i] = t;
+                      LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0,
+                              LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+                      p.setMargins(dp(3), 0, dp(3), 0);
+                      seg.addView(t, p);
+                  }
+                  panel.addView(seg);
+                  paintOrient();
 
                   sv = new ScrollView(this);
                   sv.setVerticalScrollBarEnabled(false);
@@ -309,6 +571,7 @@ jobs:
                   tv.setLineSpacing(0, 1.3f);
                   tv.setShadowLayer(8, 0, 0, Color.BLACK);
                   tv.setPadding(dp(16), dp(60), dp(16), dp(260));
+                  tv.setScaleX(mirror ? -1f : 1f);
                   sv.addView(tv);
 
                   col.addView(bar);
@@ -318,21 +581,18 @@ jobs:
                   root.addView(col, new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT));
 
-                  TextView handle = btn("\u25E2");
+                  handle = btn("\u25E2");
                   root.addView(handle, new FrameLayout.LayoutParams(
                           FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT,
                           Gravity.BOTTOM | Gravity.END));
 
-                  DisplayMetrics dm = getResources().getDisplayMetrics();
-                  lp = new WindowManager.LayoutParams(
-                          (int) (dm.widthPixels * 0.92f), (int) (dm.heightPixels * 0.4f),
+                  lp = new WindowManager.LayoutParams(100, 100,
                           WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
                           WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
                                   | WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
                           PixelFormat.TRANSLUCENT);
                   lp.gravity = Gravity.TOP | Gravity.START;
-                  lp.x = (int) (dm.widthPixels * 0.04f);
-                  lp.y = dp(120);
+                  fit();
 
                   drag.setOnTouchListener((v, e) -> {
                       if (e.getActionMasked() == MotionEvent.ACTION_DOWN) {
@@ -356,11 +616,13 @@ jobs:
                   });
                   playBtn.setOnClickListener(v -> setPlay(!playing));
                   rst.setOnClickListener(v -> { sv.scrollTo(0, 0); pos = 0; });
+                  lockBtn.setOnClickListener(v -> setLocked(true));
                   gear.setOnClickListener(v -> panel.setVisibility(
                           panel.getVisibility() == View.VISIBLE ? View.GONE : View.VISIBLE));
                   close.setOnClickListener(v -> stopSelf());
 
                   wm.addView(root, lp);
+                  applyOrientation();
               }
 
               final Runnable tick = new Runnable() {
@@ -379,7 +641,9 @@ jobs:
 
               void setPlay(boolean p) {
                   playing = p;
-                  playBtn.setText(p ? "\u23F8" : "\u25B6");
+                  String s = p ? "\u23F8" : "\u25B6";
+                  playBtn.setText(s);
+                  if (chipPlay != null) chipPlay.setText(s);
                   if (p) {
                       last = SystemClock.uptimeMillis();
                       pos = sv.getScrollY();
@@ -393,11 +657,7 @@ jobs:
               public void onConfigurationChanged(Configuration c) {
                   super.onConfigurationChanged(c);
                   if (root == null) return;
-                  DisplayMetrics dm = getResources().getDisplayMetrics();
-                  lp.width = (int) (dm.widthPixels * 0.92f);
-                  lp.height = (int) (dm.heightPixels * 0.4f);
-                  lp.x = (int) (dm.widthPixels * 0.04f);
-                  lp.y = dp(40);
+                  fit();
                   wm.updateViewLayout(root, lp);
               }
 
@@ -405,6 +665,11 @@ jobs:
               public void onDestroy() {
                   playing = false;
                   h.removeCallbacks(tick);
+                  removeChip();
+                  if (orientView != null) {
+                      try { wm.removeView(orientView); } catch (Exception e) {}
+                      orientView = null;
+                  }
                   if (root != null) {
                       try { wm.removeView(root); } catch (Exception e) {}
                       root = null;
